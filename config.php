@@ -13,16 +13,16 @@ define('SESSION_NAME', 'padlas_crm_session');
 define('SESSION_LIFETIME', 86400); // 24 óra
 
 // Alkalmazás konfiguráció
-define('APP_NAME', 'Padlás Fődem Szigetelés CRM');
+define('APP_NAME', 'Padlás Födém Szigetelés CRM');
 define('APP_URL', 'https://crm.szabolcsutep.hu/'); // Módosítsd a saját domain-edre
 
 // Időzóna
 date_default_timezone_set('Europe/Budapest');
 
 // Hibakezelés (éles környezetben kapcsold ki!)
-ini_set('display_errors', 1);
-ini_set('display_startup_errors', 1);
-error_reporting(E_ALL);
+//ini_set('display_errors', 1);
+//ini_set('display_startup_errors', 1);
+//error_reporting(E_ALL);
 
 // Adatbázis kapcsolat
 try {
