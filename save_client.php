@@ -70,12 +70,26 @@ try {
     
     // Automatikus lezárás/újranyitás logika (adminoknak és ügyintézőknek is)
     $closed_at = null;
+    $contract_signed_at = null;
+    
+    // Ellenőrizzük a jelenlegi állapotot
+    $check_stmt = $pdo->prepare("SELECT closed_at, contract_signed, contract_signed_at FROM clients WHERE id = ?");
+    $check_stmt->execute([$client_id]);
+    $existing = $check_stmt->fetch();
+    
+    // Szerződés aláírás dátumának kezelése
+    if ($contract_signed) {
+        if ($existing && $existing['contract_signed_at']) {
+            // Már van szerződés dátum, megtartjuk
+            $contract_signed_at = $existing['contract_signed_at'];
+        } elseif (!$existing['contract_signed']) {
+            // Most lett bepipálva először, új dátumot adunk
+            $contract_signed_at = date('Y-m-d H:i:s');
+        }
+    }
+    // Ha kivették a pipát, contract_signed_at = NULL
+    
     if ($contract_signed && $work_completed) {
-        // Ha mindkéttő be van pipálva, ellenőrizzük hogy már le van-e zárva
-        $check_stmt = $pdo->prepare("SELECT closed_at FROM clients WHERE id = ?");
-        $check_stmt->execute([$client_id]);
-        $existing = $check_stmt->fetch();
-        
         if ($existing && $existing['closed_at']) {
             // Már le van zárva, megtartjuk a régi dátumot
             $closed_at = $existing['closed_at'];
@@ -103,13 +117,13 @@ try {
                 name = ?, county_id = ?, settlement_id = ?, address = ?, 
                 email = ?, phone = ?, insulation_area = ?, 
                 contract_signed = ?, work_completed = ?, agent_id = ?, notes = ?,
-                closed_at = ?
+                closed_at = ?, contract_signed_at = ?
             WHERE id = ?
         ");
         $stmt->execute([
             $name, $county_id, $settlement_id, $address, 
             $email, $phone, $insulation_area, 
-            $contract_signed, $work_completed, $agent_id, $notes, $closed_at, $client_id
+            $contract_signed, $work_completed, $agent_id, $notes, $closed_at, $contract_signed_at, $client_id
         ]);
     } else {
         // Ügyintézők csak bizonyos mezőket módosíthatnak
@@ -127,10 +141,10 @@ try {
             UPDATE clients SET 
                 phone = ?, email = ?, address = ?, notes = ?,
                 insulation_area = ?, agent_id = ?,
-                contract_signed = ?, work_completed = ?, closed_at = ?
+                contract_signed = ?, work_completed = ?, closed_at = ?, contract_signed_at = ?
             WHERE id = ?
         ");
-        $stmt->execute([$phone, $email, $address, $notes, $insulation_area, $allowed_agent_id, $contract_signed, $work_completed, $closed_at, $client_id]);
+        $stmt->execute([$phone, $email, $address, $notes, $insulation_area, $allowed_agent_id, $contract_signed, $work_completed, $closed_at, $contract_signed_at, $client_id]);
     }
     
     echo json_encode(['success' => true, 'message' => 'Ügyfél sikeresen frissítve']);

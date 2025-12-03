@@ -245,8 +245,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $stmt = $pdo->prepare("
                         INSERT INTO clients 
                         (name, county_id, settlement_id, address, email, phone, insulation_area, 
-                         contract_signed, work_completed, agent_id, notes, created_by, approved)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                         contract_signed, work_completed, agent_id, notes, created_by, approved, approval_status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'approved')
                     ");
                     $stmt->execute([
                         $name, $selected_county_id, $settlement_id, $address, $email, $phone, $insulation_area,
@@ -258,8 +258,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $stmt = $pdo->prepare("
                         INSERT INTO clients 
                         (name, county_id, settlement_id, address, email, phone, insulation_area, 
-                         contract_signed, work_completed, agent_id, notes, created_by, approved)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                         contract_signed, work_completed, agent_id, notes, created_by, approved, approval_status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending')
                     ");
                     $stmt->execute([
                         $name, $selected_county_id, $settlement_id, $address, $email, $phone, $insulation_area,

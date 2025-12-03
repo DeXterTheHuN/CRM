@@ -30,7 +30,7 @@ $stmt = $pdo->prepare("
     LEFT JOIN clients c ON c.agent_id = a.id 
         AND c.contract_signed = 1 
         AND c.approved = 1
-        AND DATE(c.updated_at) BETWEEN ? AND ?
+        AND DATE(c.contract_signed_at) BETWEEN ? AND ?
     WHERE u.approved = 1
     GROUP BY a.id, a.name, u.role
     ORDER BY contract_count DESC, a.name ASC
