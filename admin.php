@@ -141,6 +141,11 @@ $agents = $stmt->fetchAll();
                         <i class="bi bi-person-circle"></i> <?php echo escape($_SESSION['name']); ?>
                         <span class="badge bg-primary ms-2">Admin</span>
                     </a>
+                    
+                    <a href="audit_log.php" class="btn btn-outline-info">
+                        <i class="bi bi-journal-text"></i> Audit Log
+                    </a>
+
                     <a href="logout.php" class="btn btn-outline-danger btn-sm">
                         <i class="bi bi-box-arrow-right"></i> Kijelentkezés
                     </a>
