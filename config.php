@@ -2,10 +2,10 @@
 // Adatbázis konfiguráció
 // FONTOS: Módosítsd ezeket az értékeket a saját cPanel adatbázis adataidra!
 
-define('DB_HOST', 'localhost');           // Általában 'localhost' cPanelen
-define('DB_NAME', 'szabolcs_padlas_crm');          // Az adatbázis neve (cPanelben létrehozott)
-define('DB_USER', 'szabolcs_admin');    // cPanel adatbázis felhasználónév
-define('DB_PASS', 'kicsi2001');    // cPanel adatbázis jelszó
+define('DB_HOST', 'localhost');
+define('DB_NAME', 'szabolcs_padlas_crm');
+define('DB_USER', 'szabolcs_admin');
+define('DB_PASS', 'kicsi2001');
 define('DB_CHARSET', 'utf8mb4');
 
 // Session konfiguráció
@@ -14,7 +14,7 @@ define('SESSION_LIFETIME', 86400); // 24 óra
 
 // Alkalmazás konfiguráció
 define('APP_NAME', 'Padlás Födém Szigetelés CRM');
-define('APP_URL', 'https://crm.szabolcsutep.hu/'); // Módosítsd a saját domain-edre
+define('APP_URL', 'https://crm.szabolcsutep.hu/');
 
 // Időzóna
 date_default_timezone_set('Europe/Budapest');
@@ -24,7 +24,7 @@ date_default_timezone_set('Europe/Budapest');
 //ini_set('display_startup_errors', 1);
 //error_reporting(E_ALL);
 
-// Adatbázis kapcsolat
+// Adatbázis kapcsolat - PERSISTENT CONNECTION
 try {
     $pdo = new PDO(
         "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET,
@@ -34,6 +34,7 @@ try {
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES => false,
+            PDO::ATTR_PERSISTENT => true, // Persistent connection engedélyezése
         ]
     );
 } catch (PDOException $e) {
