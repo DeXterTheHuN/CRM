@@ -35,29 +35,52 @@ if (!$client_id) {
 
 try {
     // Ellenőrizzük hogy az ügyfél létezik és elutasított státuszú
-    $stmt = $pdo->prepare("SELECT created_by, approval_status FROM clients WHERE id = ?");
+    $stmt = $pdo->prepare("SELECT created_by, approval_status, contract_signed_at, closed_at FROM clients WHERE id = ?");
     $stmt->execute([$client_id]);
     $client = $stmt->fetch();
-    
+
     if (!$client) {
         echo json_encode(['success' => false, 'error' => 'Ügyfél nem található']);
         exit;
     }
-    
+
     // Csak a saját elutasított ügyfelét küldheti újra
     if ($client['created_by'] != $_SESSION['user_id']) {
         echo json_encode(['success' => false, 'error' => 'Csak a saját ügyfeleidet küldheted újra']);
         exit;
     }
-    
+
     if ($client['approval_status'] !== 'rejected') {
         echo json_encode(['success' => false, 'error' => 'Csak elutasított ügyfelet küldhetsz újra']);
         exit;
     }
+
+    // JAVÍTÁS: contract_signed_at és closed_at kezelése
+    $contract_signed_at = null;
+    $closed_at = null;
     
+    // contract_signed_at kezelése
+    if ($contract_signed) {
+        if ($client['contract_signed_at']) {
+            $contract_signed_at = $client['contract_signed_at'];
+        } else {
+            $contract_signed_at = date('Y-m-d H:i:s');
+        }
+    }
+    
+    // closed_at kezelése
+    if ($contract_signed && $work_completed) {
+        if ($client['closed_at']) {
+            $closed_at = $client['closed_at'];
+        } else {
+            $closed_at = date('Y-m-d H:i:s');
+        }
+    }
+
     // Ügyfél adatainak frissítése és státusz visszaállítása pending-re
+    // JAVÍTÁS: contract_signed_at és closed_at hozzáadva
     $stmt = $pdo->prepare("
-        UPDATE clients 
+        UPDATE clients
         SET name = ?,
             phone = ?,
             email = ?,
@@ -69,6 +92,8 @@ try {
             contract_signed = ?,
             work_completed = ?,
             notes = ?,
+            contract_signed_at = ?,
+            closed_at = ?,
             approval_status = 'pending',
             approved = 0,
             approved_at = NULL,
@@ -76,7 +101,7 @@ try {
             updated_at = NOW()
         WHERE id = ?
     ");
-    
+
     $stmt->execute([
         $name,
         $phone,
@@ -89,15 +114,18 @@ try {
         $contract_signed,
         $work_completed,
         $notes,
+        $contract_signed_at,
+        $closed_at,
         $client_id
     ]);
-    
+
     echo json_encode([
         'success' => true,
         'message' => 'Ügyfél sikeresen újraküldve jóváhagyásra!'
     ]);
-    
+
 } catch (PDOException $e) {
     error_log("Resubmit error: " . $e->getMessage());
     echo json_encode(['success' => false, 'error' => 'Adatbázis hiba történt']);
 }
+?>

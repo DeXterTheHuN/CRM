@@ -19,18 +19,18 @@ if (!$county) {
 $client = null;
 if ($is_edit) {
     $stmt = $pdo->prepare("
-        SELECT c.*, s.name as settlement_name 
+        SELECT c.*, s.name as settlement_name
         FROM clients c
         LEFT JOIN settlements s ON c.settlement_id = s.id
         WHERE c.id = ?
     ");
     $stmt->execute([$client_id]);
     $client = $stmt->fetch();
-    
+
     if (!$client) {
         die('Ügyfél nem található!');
     }
-    
+
     $county_id = $client['county_id'];
 }
 
@@ -87,14 +87,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $contract_signed = isset($_POST['contract_signed']) ? 1 : 0;
     $work_completed = isset($_POST['work_completed']) ? 1 : 0;
     $agent_id_raw = $_POST['agent_id'] ?? '';
-    
+
     // Ha az ügyintéző 'current_user', akkor hozzáadjuk az agents táblához
     if ($agent_id_raw === 'current_user') {
         // Ellenőrizzük, hogy már létezik-e
         $stmt = $pdo->prepare("SELECT id FROM agents WHERE name = ?");
         $stmt->execute([$_SESSION['name']]);
         $existing_agent = $stmt->fetch();
-        
+
         if ($existing_agent) {
             $agent_id = $existing_agent['id'];
         } else {
@@ -107,62 +107,91 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $agent_id = !empty($agent_id_raw) ? $agent_id_raw : null;
     }
     $notes = trim($_POST['notes'] ?? '');
-    
+
     // Ügyintéző szerkesztés - ellenőrizzük a védettséget
     if (!isAdmin() && $is_edit) {
         // Ellenőrizzük, hogy az ügyfélhez már van-e ügyintéző rendelve
         $stmt = $pdo->prepare("SELECT agent_id FROM clients WHERE id = ?");
         $stmt->execute([$client_id]);
         $current_client = $stmt->fetch();
-        
+
         // Ha már van ügyintéző és nem az aktuális felhasználó, nem szerkeszthető
         if ($current_client['agent_id'] && $current_client['agent_id'] != $agent_id) {
             // Ellenőrizzük, hogy az aktuális felhasználó az ügyintéző-e
             $stmt = $pdo->prepare("SELECT id FROM agents WHERE name = ?");
             $stmt->execute([$_SESSION['name']]);
             $current_agent = $stmt->fetch();
-            
+
             if ($current_agent && $current_agent['id'] != $current_client['agent_id']) {
                 $error = 'Ez az ügyfél már egy másik ügyintézőhöz van rendelve. Nem szerkesztheted!';
             } else {
                 // Automatikus lezárás/újranyitás logika (ügyintézőknél is)
+                // JAVÍTÁS: contract_signed_at és closed_at kezelése
+                $contract_signed_at = null;
                 $closed_at = null;
+                
+                // Lekérjük a meglévő értékeket
+                $check_stmt = $pdo->prepare("SELECT contract_signed_at, closed_at FROM clients WHERE id = ?");
+                $check_stmt->execute([$client_id]);
+                $existing = $check_stmt->fetch();
+                
+                // contract_signed_at kezelése
+                if ($contract_signed) {
+                    if ($existing && $existing['contract_signed_at']) {
+                        $contract_signed_at = $existing['contract_signed_at'];
+                    } else {
+                        $contract_signed_at = date('Y-m-d H:i:s');
+                    }
+                }
+                
+                // closed_at kezelése
                 if ($contract_signed && $work_completed) {
-                    $check_stmt = $pdo->prepare("SELECT closed_at FROM clients WHERE id = ?");
-                    $check_stmt->execute([$client_id]);
-                    $existing = $check_stmt->fetch();
-                    
                     if ($existing && $existing['closed_at']) {
                         $closed_at = $existing['closed_at'];
                     } else {
                         $closed_at = date('Y-m-d H:i:s');
                     }
                 }
-                
-                // Frissítés - 8 mező: ügyintéző, szerződés, kivitelezés, telefon, cím, terület, megjegyzés, closed_at
-                $stmt = $pdo->prepare("UPDATE clients SET agent_id = ?, contract_signed = ?, work_completed = ?, phone = ?, address = ?, insulation_area = ?, notes = ?, closed_at = ? WHERE id = ?");
-                $stmt->execute([$agent_id, $contract_signed, $work_completed, $phone, $address, $insulation_area, $notes, $closed_at, $client_id]);
+
+                // Frissítés - JAVÍTÁS: contract_signed_at hozzáadva
+                $stmt = $pdo->prepare("UPDATE clients SET agent_id = ?, contract_signed = ?, work_completed = ?, phone = ?, address = ?, insulation_area = ?, notes = ?, contract_signed_at = ?, closed_at = ? WHERE id = ?");
+                $stmt->execute([$agent_id, $contract_signed, $work_completed, $phone, $address, $insulation_area, $notes, $contract_signed_at, $closed_at, $client_id]);
                 $success = 'Ügyfél sikeresen frissítve!';
                 header("refresh:1;url=county.php?id=$county_id");
             }
         } else {
             // Automatikus lezárás/újranyitás logika (ügyintézőknél is)
+            // JAVÍTÁS: contract_signed_at és closed_at kezelése
+            $contract_signed_at = null;
             $closed_at = null;
+            
+            // Lekérjük a meglévő értékeket
+            $check_stmt = $pdo->prepare("SELECT contract_signed_at, closed_at FROM clients WHERE id = ?");
+            $check_stmt->execute([$client_id]);
+            $existing = $check_stmt->fetch();
+            
+            // contract_signed_at kezelése
+            if ($contract_signed) {
+                if ($existing && $existing['contract_signed_at']) {
+                    $contract_signed_at = $existing['contract_signed_at'];
+                } else {
+                    $contract_signed_at = date('Y-m-d H:i:s');
+                }
+            }
+            
+            // closed_at kezelése
             if ($contract_signed && $work_completed) {
-                $check_stmt = $pdo->prepare("SELECT closed_at FROM clients WHERE id = ?");
-                $check_stmt->execute([$client_id]);
-                $existing = $check_stmt->fetch();
-                
                 if ($existing && $existing['closed_at']) {
                     $closed_at = $existing['closed_at'];
                 } else {
                     $closed_at = date('Y-m-d H:i:s');
                 }
             }
-            
+
             // Nincs még ügyintéző vagy az aktuális felhasználó az ügyintéző
-            $stmt = $pdo->prepare("UPDATE clients SET agent_id = ?, contract_signed = ?, work_completed = ?, phone = ?, address = ?, insulation_area = ?, notes = ?, closed_at = ? WHERE id = ?");
-            $stmt->execute([$agent_id, $contract_signed, $work_completed, $phone, $address, $insulation_area, $notes, $closed_at, $client_id]);
+            // JAVÍTÁS: contract_signed_at hozzáadva
+            $stmt = $pdo->prepare("UPDATE clients SET agent_id = ?, contract_signed = ?, work_completed = ?, phone = ?, address = ?, insulation_area = ?, notes = ?, contract_signed_at = ?, closed_at = ? WHERE id = ?");
+            $stmt->execute([$agent_id, $contract_signed, $work_completed, $phone, $address, $insulation_area, $notes, $contract_signed_at, $closed_at, $client_id]);
             $success = 'Ügyfél sikeresen frissítve!';
             header("refresh:1;url=county.php?id=$county_id");
         }
@@ -191,84 +220,111 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $stmt = $pdo->prepare("SELECT id FROM clients WHERE email = ?");
                         $stmt->execute([$email]);
                     }
-                    
+
                     if ($stmt->fetch()) {
                         $error = 'Ez az e-mail cím már használatban van egy másik ügyfélnél!';
                     }
                 }
             }
         }
-        
+
         if (!$error) {
             // Admin és Ügyintéző hozzáadás/szerkesztés
             if ($is_edit) {
                 // Szerkesztésnél
                 if (isAdmin()) {
-                    // Automatikus lezárás/újranyitás logika
+                    // JAVÍTÁS: contract_signed_at és closed_at kezelése
+                    $contract_signed_at = null;
                     $closed_at = null;
+                    
+                    // Lekérjük a meglévő értékeket
+                    $check_stmt = $pdo->prepare("SELECT contract_signed_at, closed_at FROM clients WHERE id = ?");
+                    $check_stmt->execute([$client_id]);
+                    $existing = $check_stmt->fetch();
+                    
+                    // contract_signed_at kezelése
+                    if ($contract_signed) {
+                        if ($existing && $existing['contract_signed_at']) {
+                            $contract_signed_at = $existing['contract_signed_at'];
+                        } else {
+                            $contract_signed_at = date('Y-m-d H:i:s');
+                        }
+                    }
+                    
+                    // closed_at kezelése
                     if ($contract_signed && $work_completed) {
-                        // Ha mindkettő be van pipálva, ellenőrizzük hogy már le van-e zárva
-                        $check_stmt = $pdo->prepare("SELECT closed_at FROM clients WHERE id = ?");
-                        $check_stmt->execute([$client_id]);
-                        $existing = $check_stmt->fetch();
-                        
                         if ($existing && $existing['closed_at']) {
-                            // Már le van zárva, megtartjuk a régi dátumot
                             $closed_at = $existing['closed_at'];
                         } else {
-                            // Még nincs lezárva, új dátumot adunk
                             $closed_at = date('Y-m-d H:i:s');
                         }
                     }
-                    // Ha valamelyik pipa nincs bejelve, closed_at = NULL (újranyitás)
-                    
-                    // Admin minden mezőt módosíthat
+
+                    // Admin minden mezőt módosíthat - JAVÍTÁS: contract_signed_at hozzáadva
                     $stmt = $pdo->prepare("
-                        UPDATE clients SET 
-                            name = ?, county_id = ?, settlement_id = ?, address = ?, 
-                            email = ?, phone = ?, insulation_area = ?, 
+                        UPDATE clients SET
+                            name = ?, county_id = ?, settlement_id = ?, address = ?,
+                            email = ?, phone = ?, insulation_area = ?,
                             contract_signed = ?, work_completed = ?, agent_id = ?, notes = ?,
-                            closed_at = ?
+                            contract_signed_at = ?, closed_at = ?
                         WHERE id = ?
                     ");
                     $stmt->execute([
-                        $name, $selected_county_id, $settlement_id, $address, 
-                        $email, $phone, $insulation_area, 
-                        $contract_signed, $work_completed, $agent_id, $notes, $closed_at, $client_id
+                        $name, $selected_county_id, $settlement_id, $address,
+                        $email, $phone, $insulation_area,
+                        $contract_signed, $work_completed, $agent_id, $notes,
+                        $contract_signed_at, $closed_at, $client_id
                     ]);
                     $success = 'Ügyfél sikeresen frissítve!';
                 }
             } else {
                 // Új ügyfél hozzáadása
+                // JAVÍTÁS: contract_signed_at és closed_at számítása új ügyféleknél
+                $contract_signed_at = null;
+                $closed_at = null;
+                
+                if ($contract_signed) {
+                    $contract_signed_at = date('Y-m-d H:i:s');
+                }
+                if ($contract_signed && $work_completed) {
+                    $closed_at = date('Y-m-d H:i:s');
+                }
+                
                 if (isAdmin()) {
                     // Admin által létrehozott ügyfél azonnal jóváhagyott
+                    // JAVÍTÁS: contract_signed_at és closed_at hozzáadva
                     $stmt = $pdo->prepare("
-                        INSERT INTO clients 
-                        (name, county_id, settlement_id, address, email, phone, insulation_area, 
-                         contract_signed, work_completed, agent_id, notes, created_by, approved, approval_status)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'approved')
+                        INSERT INTO clients
+                        (name, county_id, settlement_id, address, email, phone, insulation_area,
+                         contract_signed, work_completed, agent_id, notes, created_by, approved, approval_status,
+                         contract_signed_at, closed_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'approved', ?, ?)
                     ");
                     $stmt->execute([
                         $name, $selected_county_id, $settlement_id, $address, $email, $phone, $insulation_area,
-                        $contract_signed, $work_completed, $agent_id, $notes, $_SESSION['user_id']
+                        $contract_signed, $work_completed, $agent_id, $notes, $_SESSION['user_id'],
+                        $contract_signed_at, $closed_at
                     ]);
                     $success = 'Ügyfél sikeresen létrehozva!';
                 } else {
                     // Ügyintéző által létrehozott ügyfél jóváhagyásra vár
+                    // JAVÍTÁS: contract_signed_at és closed_at hozzáadva
                     $stmt = $pdo->prepare("
-                        INSERT INTO clients 
-                        (name, county_id, settlement_id, address, email, phone, insulation_area, 
-                         contract_signed, work_completed, agent_id, notes, created_by, approved, approval_status)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending')
+                        INSERT INTO clients
+                        (name, county_id, settlement_id, address, email, phone, insulation_area,
+                         contract_signed, work_completed, agent_id, notes, created_by, approved, approval_status,
+                         contract_signed_at, closed_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending', ?, ?)
                     ");
                     $stmt->execute([
                         $name, $selected_county_id, $settlement_id, $address, $email, $phone, $insulation_area,
-                        $contract_signed, $work_completed, $agent_id, $notes, $_SESSION['user_id']
+                        $contract_signed, $work_completed, $agent_id, $notes, $_SESSION['user_id'],
+                        $contract_signed_at, $closed_at
                     ]);
                     $success = 'Ügyfél sikeresen létrehozva! Jóváhagyásra vár az adminisztrátor által.';
                 }
             }
-            
+
             // Átirányítás 1 másodperc után
             header("refresh:3;url=county.php?id=$selected_county_id");
         }
@@ -328,89 +384,89 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <h4 class="mb-4">
                 <?php echo $is_edit ? 'Ügyfél szerkesztése' : 'Új ügyfél hozzáadása - ' . escape($county['name']); ?>
             </h4>
-            
+
             <?php if (!isAdmin() && $is_edit): ?>
                 <div class="alert alert-info">
                     Ügyintézőként csak az ügyintéző, szerződéskötés és kivitelezés mezőket módosíthatod.
                 </div>
             <?php endif; ?>
-            
+
             <?php if ($error): ?>
                 <div class="alert alert-danger"><?php echo escape($error); ?></div>
             <?php endif; ?>
-            
+
             <?php if ($success): ?>
                 <div class="alert alert-success"><?php echo escape($success); ?></div>
             <?php endif; ?>
-            
+
             <form method="POST" id="clientForm">
                 <div class="row g-3">
                     <div class="col-md-6">
                         <label for="name" class="form-label">Név *</label>
-                        <input type="text" class="form-control" id="name" name="name" 
-                               value="<?php echo escape($client['name'] ?? ''); ?>" 
+                        <input type="text" class="form-control" id="name" name="name"
+                               value="<?php echo escape($client['name'] ?? ''); ?>"
                                <?php echo (!isAdmin() && $is_edit) ? 'readonly' : 'required'; ?>>
                     </div>
-                    
+
                     <?php if (isAdmin() || !$is_edit): ?>
                         <div class="col-md-6">
                             <label for="county_id" class="form-label">Megye *</label>
-                            <select class="form-select" id="county_id" name="county_id" required 
+                            <select class="form-select" id="county_id" name="county_id" required
                                     onchange="loadSettlements(this.value)">
                                 <?php foreach ($counties as $c): ?>
-                                    <option value="<?php echo $c['id']; ?>" 
+                                    <option value="<?php echo $c['id']; ?>"
                                             <?php echo ($c['id'] == $county_id) ? 'selected' : ''; ?>>
                                         <?php echo escape($c['name']); ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
-                        
+
                         <div class="col-md-6">
                             <label for="settlement_search" class="form-label">Település *</label>
-                            <input type="text" class="form-control" id="settlement_search" 
-                                   placeholder="Írj be egy települést..." 
+                            <input type="text" class="form-control" id="settlement_search"
+                                   placeholder="Írj be egy települést..."
                                    autocomplete="off"
                                    required
                                    value="<?php echo $client ? escape($client['settlement_name'] ?? '') : ''; ?>">
-                            <input type="hidden" id="settlement_id" name="settlement_id" 
+                            <input type="hidden" id="settlement_id" name="settlement_id"
                                    value="<?php echo $client['settlement_id'] ?? ''; ?>"
                                    required>
                             <div id="settlement_dropdown" class="list-group position-absolute" style="z-index: 1000; max-height: 300px; overflow-y: auto; display: none;"></div>
                         </div>
-                        
+
                         <div class="col-md-6">
                             <label for="email" class="form-label">E-mail</label>
-                            <input type="email" class="form-control" id="email" name="email" 
+                            <input type="email" class="form-control" id="email" name="email"
                                    value="<?php echo escape($client['email'] ?? ''); ?>">
                         </div>
                     <?php endif; ?>
-                    
+
                     <!-- Ezeket a mezőket mindenki szerkesztheti -->
                     <div class="col-md-6">
                         <label for="address" class="form-label">Utca/Házszám</label>
-                        <input type="text" class="form-control" id="address" name="address" 
+                        <input type="text" class="form-control" id="address" name="address"
                                value="<?php echo escape($client['address'] ?? ''); ?>">
                     </div>
-                    
+
                     <div class="col-md-6">
                         <label for="phone" class="form-label">Telefon *</label>
-                        <input type="text" class="form-control" id="phone" name="phone" 
+                        <input type="text" class="form-control" id="phone" name="phone"
                                required
                                value="<?php echo escape($client['phone'] ?? ''); ?>">
                     </div>
-                    
+
                     <div class="col-md-6">
                         <label for="insulation_area" class="form-label">Szigetelenő terület (m²)</label>
-                        <input type="number" class="form-control" id="insulation_area" name="insulation_area" 
+                        <input type="number" class="form-control" id="insulation_area" name="insulation_area"
                                value="<?php echo escape($client['insulation_area'] ?? ''); ?>">
                     </div>
-                    
+
                     <div class="col-md-6">
                         <label for="agent_id" class="form-label">Ügyintéző</label>
                         <select class="form-select" id="agent_id" name="agent_id">
                             <option value="">Válassz ügyintézőt</option>
-                            <?php 
+                            <?php
                             // Ha ügyintéző, csak saját magát láthatja
                             if (!isAdmin()) {
                                 // Csak az aktuális felhasználó megtalálása
@@ -431,33 +487,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             ?>
                         </select>
                     </div>
-                    
+
                     <div class="col-12">
                         <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="contract_signed" name="contract_signed" 
+                            <input class="form-check-input" type="checkbox" id="contract_signed" name="contract_signed"
                                    <?php echo ($client && $client['contract_signed']) ? 'checked' : ''; ?>>
                             <label class="form-check-label" for="contract_signed">
                                 Szerződéskötés?
                             </label>
                         </div>
                     </div>
-                    
+
                     <div class="col-12">
                         <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="work_completed" name="work_completed" 
+                            <input class="form-check-input" type="checkbox" id="work_completed" name="work_completed"
                                    <?php echo ($client && $client['work_completed']) ? 'checked' : ''; ?>>
                             <label class="form-check-label" for="work_completed">
                                 Kivitelezés?
                             </label>
                         </div>
                     </div>
-                    
+
                     <div class="col-12">
                         <label for="notes" class="form-label">Megjegyzés</label>
                         <textarea class="form-control" id="notes" name="notes" rows="4"><?php echo escape($client['notes'] ?? ''); ?></textarea>
                     </div>
                 </div>
-                
+
                 <div class="mt-4">
                     <button type="submit" class="btn btn-primary">
                         <i class="bi bi-check-circle"></i> Mentés
@@ -474,7 +530,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <script>
         let settlements = [];
         let currentCountyId = <?php echo $county_id; ?>;
-        
+
         // Települések betöltése a megyéhez (Promise-szal)
         function loadSettlements(countyId, preserveSelection = false) {
             currentCountyId = countyId;
@@ -489,12 +545,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     return data;
                 });
         }
-        
+
         // Autocomplete funkció
         const searchInput = document.getElementById('settlement_search');
         const dropdown = document.getElementById('settlement_dropdown');
         const hiddenInput = document.getElementById('settlement_id');
-        
+
         // Települések betöltése az oldal betöltésekor
         <?php if ($is_edit && $client && !empty($client['settlement_name'])): ?>
         // Szerkesztés mód: betöltjük a településeket, majd beállítjuk a meglévőt
@@ -508,25 +564,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Új ügyfél mód: csak betöltjük a településeket
         loadSettlements(currentCountyId);
         <?php endif; ?>
-        
+
         searchInput.addEventListener('input', function() {
             const searchTerm = this.value.toLowerCase();
-            
+
             if (searchTerm.length === 0) {
                 dropdown.style.display = 'none';
                 hiddenInput.value = '';
                 return;
             }
-            
-            const filtered = settlements.filter(s => 
+
+            const filtered = settlements.filter(s =>
                 s.name.toLowerCase().includes(searchTerm)
             );
-            
+
             if (filtered.length === 0) {
                 dropdown.style.display = 'none';
                 return;
             }
-            
+
             dropdown.innerHTML = '';
             filtered.forEach(settlement => {
                 const item = document.createElement('a');
@@ -541,17 +597,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 };
                 dropdown.appendChild(item);
             });
-            
+
             dropdown.style.display = 'block';
         });
-        
+
         // Kattintás máshova -> bezárás
         document.addEventListener('click', function(e) {
             if (e.target !== searchInput) {
                 dropdown.style.display = 'none';
             }
         });
-        
+
         // Megye változásakor frissítjük a településeket
         const countySelect = document.getElementById('county_id');
         if (countySelect) {
