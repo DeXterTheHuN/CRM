@@ -1,5 +1,6 @@
 <?php
 require_once 'config.php';
+require_once 'audit_helper.php';
 requireLogin();
 requireAdmin();
 
@@ -10,29 +11,23 @@ $error = '';
 if (isset($_POST['approve_client'])) {
     $client_id = (int)$_POST['client_id'];
 
-    // Ügyfél adatok lekérdezése értesítéshez és checkbox állapotokhoz
-    // JAVÍTÁS: contract_signed, work_completed, contract_signed_at, closed_at lekérdezése
-    $stmt = $pdo->prepare("SELECT name, created_by, contract_signed, work_completed, contract_signed_at, closed_at FROM clients WHERE id = ?");
+    // Ügyfél adatok lekérdezése értesítéshez ÉS audit loghoz
+    $stmt = $pdo->prepare("SELECT * FROM clients WHERE id = ?");
     $stmt->execute([$client_id]);
     $client = $stmt->fetch();
 
-    // JAVÍTÁS: contract_signed_at és closed_at beállítása jóváhagyáskor
-    $contract_signed_at = $client['contract_signed_at'];
-    $closed_at = $client['closed_at'];
-    
-    // Ha a contract_signed be van pipálva és még nincs contract_signed_at
-    if ($client['contract_signed'] && !$contract_signed_at) {
-        $contract_signed_at = date('Y-m-d H:i:s');
-    }
-    
-    // Ha mindkettő be van pipálva és még nincs closed_at
-    if ($client['contract_signed'] && $client['work_completed'] && !$closed_at) {
-        $closed_at = date('Y-m-d H:i:s');
-    }
+    // Jóváhagyás
+    $stmt = $pdo->prepare("UPDATE clients SET approved = 1, approval_status = 'approved', approved_at = NOW(), approved_by = ? WHERE id = ?");
+    $stmt->execute([$_SESSION['user_id'], $client_id]);
 
-    // Jóváhagyás - JAVÍTÁS: contract_signed_at és closed_at hozzáadva
-    $stmt = $pdo->prepare("UPDATE clients SET approved = 1, approval_status = 'approved', approved_at = NOW(), approved_by = ?, contract_signed_at = ?, closed_at = ? WHERE id = ?");
-    $stmt->execute([$_SESSION['user_id'], $contract_signed_at, $closed_at, $client_id]);
+    // AUDIT LOG - Jóváhagyás
+    logClientApprove($pdo, $client_id, [
+        'name' => $client['name'],
+        'county_id' => $client['county_id'],
+        'settlement_id' => $client['settlement_id'],
+        'created_by' => $client['created_by'],
+        'approved_by' => $_SESSION['user_id']
+    ]);
 
     // Értesítés létrehozása az ügyintézőnek
     if ($client && $client['created_by']) {
@@ -51,14 +46,22 @@ if (isset($_POST['reject_client'])) {
     if (empty($rejection_reason)) {
         $error = 'Az elutasítás indoklása kötelező!';
     } else {
-        // Ügyfél adatok lekérdezése értesítéshez
-        $stmt = $pdo->prepare("SELECT name, created_by FROM clients WHERE id = ?");
+        // Ügyfél adatok lekérdezése értesítéshez ÉS audit loghoz
+        $stmt = $pdo->prepare("SELECT * FROM clients WHERE id = ?");
         $stmt->execute([$client_id]);
         $client = $stmt->fetch();
 
         // Elutasítás
         $stmt = $pdo->prepare("UPDATE clients SET approved = 0, approval_status = 'rejected', rejection_reason = ?, approved_at = NOW(), approved_by = ? WHERE id = ?");
         $stmt->execute([$rejection_reason, $_SESSION['user_id'], $client_id]);
+
+        // AUDIT LOG - Elutasítás
+        logClientReject($pdo, $client_id, [
+            'name' => $client['name'],
+            'county_id' => $client['county_id'],
+            'settlement_id' => $client['settlement_id'],
+            'created_by' => $client['created_by']
+        ], $rejection_reason);
 
         // Értesítés létrehozása az ügyintézőnek
         if ($client && $client['created_by']) {
@@ -69,6 +72,9 @@ if (isset($_POST['reject_client'])) {
         $success = 'Ügyfél elutasítva!';
     }
 }
+
+// A többi rész változatlan...
+
 
 // Jóváhagyásra váró ügyfelek lekérdezése
 $stmt = $pdo->query("

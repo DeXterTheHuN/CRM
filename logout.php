@@ -1,9 +1,11 @@
 <?php
 require_once 'config.php';
+require_once 'audit_helper.php';
 
-// Session törlése
+if (isLoggedIn()) {
+    logLogout($pdo, $_SESSION['user_id']);
+}
+
 session_destroy();
-
-// Átirányítás a bejelentkezési oldalra
 redirect('login.php');
-?>
+

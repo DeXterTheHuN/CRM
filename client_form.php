@@ -1,6 +1,8 @@
 <?php
 require_once 'config.php';
+require_once 'audit_helper.php';
 requireLogin();
+
 
 $county_id = $_GET['county_id'] ?? 0;
 $client_id = $_GET['id'] ?? 0;
@@ -233,26 +235,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($is_edit) {
                 // Szerkesztésnél
                 if (isAdmin()) {
-                    // JAVÍTÁS: contract_signed_at és closed_at kezelése
-                    $contract_signed_at = null;
+                    // Régi adatok lekérése audit loghoz
+                    $stmt = $pdo->prepare("SELECT * FROM clients WHERE id = ?");
+                    $stmt->execute([$client_id]);
+                    $old_data = $stmt->fetch();
+
+                    // Automatikus lezárás/újranyitás logika
                     $closed_at = null;
-                    
-                    // Lekérjük a meglévő értékeket
-                    $check_stmt = $pdo->prepare("SELECT contract_signed_at, closed_at FROM clients WHERE id = ?");
-                    $check_stmt->execute([$client_id]);
-                    $existing = $check_stmt->fetch();
-                    
-                    // contract_signed_at kezelése
-                    if ($contract_signed) {
-                        if ($existing && $existing['contract_signed_at']) {
-                            $contract_signed_at = $existing['contract_signed_at'];
-                        } else {
-                            $contract_signed_at = date('Y-m-d H:i:s');
-                        }
-                    }
-                    
-                    // closed_at kezelése
                     if ($contract_signed && $work_completed) {
+                        $check_stmt = $pdo->prepare("SELECT closed_at FROM clients WHERE id = ?");
+                        $check_stmt->execute([$client_id]);
+                        $existing = $check_stmt->fetch();
+
                         if ($existing && $existing['closed_at']) {
                             $closed_at = $existing['closed_at'];
                         } else {
@@ -260,23 +254,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
                     }
 
-                    // Admin minden mezőt módosíthat - JAVÍTÁS: contract_signed_at hozzáadva
+                    // Admin minden mezőt módosíthat
                     $stmt = $pdo->prepare("
                         UPDATE clients SET
                             name = ?, county_id = ?, settlement_id = ?, address = ?,
                             email = ?, phone = ?, insulation_area = ?,
                             contract_signed = ?, work_completed = ?, agent_id = ?, notes = ?,
-                            contract_signed_at = ?, closed_at = ?
+                            closed_at = ?
                         WHERE id = ?
                     ");
                     $stmt->execute([
                         $name, $selected_county_id, $settlement_id, $address,
                         $email, $phone, $insulation_area,
-                        $contract_signed, $work_completed, $agent_id, $notes,
-                        $contract_signed_at, $closed_at, $client_id
+                        $contract_signed, $work_completed, $agent_id, $notes, $closed_at, $client_id
                     ]);
+
+                    // AUDIT LOG - Frissítés
+                    $new_data = [
+                        'name' => $name,
+                        'county_id' => $selected_county_id,
+                        'settlement_id' => $settlement_id,
+                        'address' => $address,
+                        'email' => $email,
+                        'phone' => $phone,
+                        'insulation_area' => $insulation_area,
+                        'contract_signed' => $contract_signed,
+                        'work_completed' => $work_completed,
+                        'agent_id' => $agent_id,
+                        'notes' => $notes,
+                        'closed_at' => $closed_at
+                    ];
+                    logClientUpdate($pdo, $client_id, $old_data, $new_data);
+
                     $success = 'Ügyfél sikeresen frissítve!';
                 }
+
             } else {
                 // Új ügyfél hozzáadása
                 // JAVÍTÁS: contract_signed_at és closed_at számítása új ügyféleknél
@@ -290,39 +302,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $closed_at = date('Y-m-d H:i:s');
                 }
                 
+                // Új ügyfél hozzáadása
                 if (isAdmin()) {
                     // Admin által létrehozott ügyfél azonnal jóváhagyott
-                    // JAVÍTÁS: contract_signed_at és closed_at hozzáadva
                     $stmt = $pdo->prepare("
                         INSERT INTO clients
                         (name, county_id, settlement_id, address, email, phone, insulation_area,
-                         contract_signed, work_completed, agent_id, notes, created_by, approved, approval_status,
-                         contract_signed_at, closed_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'approved', ?, ?)
+                        contract_signed, work_completed, agent_id, notes, created_by, approved, approval_status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'approved')
                     ");
                     $stmt->execute([
                         $name, $selected_county_id, $settlement_id, $address, $email, $phone, $insulation_area,
-                        $contract_signed, $work_completed, $agent_id, $notes, $_SESSION['user_id'],
-                        $contract_signed_at, $closed_at
+                        $contract_signed, $work_completed, $agent_id, $notes, $_SESSION['user_id']
                     ]);
+    
+                    $new_client_id = $pdo->lastInsertId();
+    
+                    // AUDIT LOG - Új ügyfél létrehozása
+                    logClientCreate($pdo, $new_client_id, [
+                        'name' => $name,
+                        'county_id' => $selected_county_id,
+                        'settlement_id' => $settlement_id,
+                        'address' => $address,
+                        'email' => $email,
+                        'phone' => $phone,
+                        'insulation_area' => $insulation_area,
+                        'contract_signed' => $contract_signed,
+                        'work_completed' => $work_completed,
+                        'agent_id' => $agent_id,
+                        'notes' => $notes,
+                        'created_by' => $_SESSION['user_id'],
+                        'approved' => 1,
+                        'approval_status' => 'approved'
+                    ]);
+    
                     $success = 'Ügyfél sikeresen létrehozva!';
                 } else {
                     // Ügyintéző által létrehozott ügyfél jóváhagyásra vár
-                    // JAVÍTÁS: contract_signed_at és closed_at hozzáadva
                     $stmt = $pdo->prepare("
                         INSERT INTO clients
                         (name, county_id, settlement_id, address, email, phone, insulation_area,
-                         contract_signed, work_completed, agent_id, notes, created_by, approved, approval_status,
-                         contract_signed_at, closed_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending', ?, ?)
+                        contract_signed, work_completed, agent_id, notes, created_by, approved, approval_status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending')
                     ");
                     $stmt->execute([
                         $name, $selected_county_id, $settlement_id, $address, $email, $phone, $insulation_area,
-                        $contract_signed, $work_completed, $agent_id, $notes, $_SESSION['user_id'],
-                        $contract_signed_at, $closed_at
+                        $contract_signed, $work_completed, $agent_id, $notes, $_SESSION['user_id']
                     ]);
+    
+                    $new_client_id = $pdo->lastInsertId();
+    
+                    // AUDIT LOG - Új ügyfél (pending)
+                    logClientCreate($pdo, $new_client_id, [
+                        'name' => $name,
+                        'county_id' => $selected_county_id,
+                        'settlement_id' => $settlement_id,
+                        'created_by' => $_SESSION['user_id'],
+                        'approved' => 0,
+                        'approval_status' => 'pending'
+                    ]);
+    
                     $success = 'Ügyfél sikeresen létrehozva! Jóváhagyásra vár az adminisztrátor által.';
                 }
+
             }
 
             // Átirányítás 1 másodperc után

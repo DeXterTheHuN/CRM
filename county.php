@@ -1,5 +1,6 @@
 <?php
 require_once 'config.php';
+require_once 'audit_helper.php';
 requireLogin();
 
 $county_id = $_GET['id'] ?? 0;
@@ -13,29 +14,24 @@ if (!$county) {
     die('Megye nem található!');
 }
 
+// Pagination beállítások
+$per_page = 20; // Ügyfelek oldalanként
+$page = max(1, intval($_GET['page'] ?? 1));
+$offset = ($page - 1) * $per_page;
+
 // Keresési, szűrési és rendezési paraméterek
 $search = $_GET['search'] ?? '';
 $filter_agent = $_GET['filter_agent'] ?? '';
-$sort_by = $_GET['sort_by'] ?? 'created_at'; // Alapértelmezett: létrehozás dátuma
+$sort_by = $_GET['sort_by'] ?? 'created_at';
 
-// Ügyfelek lekérdezése szűréssel (csak jóváhagyottak)
-$query = "
-    SELECT 
-        c.*,
-        s.name as settlement_name,
-        a.name as agent_name,
-        a.color as agent_color
-    FROM clients c
-    LEFT JOIN settlements s ON c.settlement_id = s.id
-    LEFT JOIN agents a ON c.agent_id = a.id
-    WHERE c.county_id = ? AND c.approved = 1 AND c.closed_at IS NULL
-";
-
+// Alap query feltételek
+$base_where = "c.county_id = ? AND c.approved = 1 AND c.closed_at IS NULL";
 $params = [$county_id];
 
 // Keresési feltétel
+$search_condition = "";
 if (!empty($search)) {
-    $query .= " AND (c.name LIKE ? OR s.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)";
+    $search_condition = " AND (c.name LIKE ? OR s.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ?)";
     $search_param = "%$search%";
     $params[] = $search_param;
     $params[] = $search_param;
@@ -44,31 +40,58 @@ if (!empty($search)) {
 }
 
 // Ügyintéző szűrés
+$agent_condition = "";
 if (!empty($filter_agent)) {
     if ($filter_agent === 'none') {
-        $query .= " AND c.agent_id IS NULL";
+        $agent_condition = " AND c.agent_id IS NULL";
     } else {
-        $query .= " AND c.agent_id = ?";
+        $agent_condition = " AND c.agent_id = ?";
         $params[] = $filter_agent;
     }
 }
 
+// Összes rekord számának lekérdezése (pagination-höz)
+$count_query = "
+    SELECT COUNT(*) as total
+    FROM clients c
+    LEFT JOIN settlements s ON c.settlement_id = s.id
+    WHERE $base_where $search_condition $agent_condition
+";
+$count_params = $params; // Ugyanazok a paraméterek
+$stmt = $pdo->prepare($count_query);
+$stmt->execute($count_params);
+$total_records = $stmt->fetch()['total'];
+$total_pages = ceil($total_records / $per_page);
+
 // Rendezés
-if ($sort_by === 'settlement_asc') {
-    $query .= " ORDER BY s.name ASC, c.created_at DESC";
-} elseif ($sort_by === 'settlement_desc') {
-    $query .= " ORDER BY s.name DESC, c.created_at DESC";
-} else {
-    $query .= " ORDER BY c.created_at DESC";
-}
+$order_by = match($sort_by) {
+    'settlement_asc' => " ORDER BY s.name ASC, c.created_at DESC",
+    'settlement_desc' => " ORDER BY s.name DESC, c.created_at DESC",
+    default => " ORDER BY c.created_at DESC"
+};
+
+// Ügyfelek lekérdezése LIMIT-tel
+$query = "
+    SELECT
+        c.*,
+        s.name as settlement_name,
+        a.name as agent_name,
+        a.color as agent_color
+    FROM clients c
+    LEFT JOIN settlements s ON c.settlement_id = s.id
+    LEFT JOIN agents a ON c.agent_id = a.id
+    WHERE $base_where $search_condition $agent_condition
+    $order_by
+    LIMIT $per_page OFFSET $offset
+";
 
 $stmt = $pdo->prepare($query);
 $stmt->execute($params);
 $clients = $stmt->fetchAll();
 
-// Ügyintézők lekérdezése a szűrőhöz (csak aktív felhasználók)
+// Ügyintézők lekérdezése a szűrőhöz
 $stmt = $pdo->query("
-    SELECT a.* 
+    SELECT a.*
     FROM agents a
     INNER JOIN users u ON a.name = u.name
     WHERE u.approved = 1
@@ -87,24 +110,57 @@ if (!isAdmin()) {
     }
 }
 
-// Törlés kezelése
+// Törlés kezelése - AUDIT LOG-gal
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_id']) && isAdmin()) {
     $delete_id = $_POST['delete_id'];
+    
+    // Előbb lekérjük az adatokat az audit log-hoz
+    $stmt = $pdo->prepare("SELECT * FROM clients WHERE id = ?");
+    $stmt->execute([$delete_id]);
+    $deleted_client = $stmt->fetch();
+    
     $stmt = $pdo->prepare("DELETE FROM clients WHERE id = ?");
     $stmt->execute([$delete_id]);
-    redirect("county.php?id=$county_id");
+    
+    // Audit log
+    logClientDelete($pdo, $delete_id, $deleted_client);
+    
+    redirect("county.php?id=$county_id&page=$page");
 }
 
-// Tömeges törlés kezelése
+// Tömeges törlés kezelése - AUDIT LOG-gal
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['bulk_delete']) && isAdmin()) {
     $client_ids = $_POST['client_ids'] ?? '';
     if (!empty($client_ids)) {
         $ids = explode(',', $client_ids);
+        
+        // Minden törölt ügyfélhez audit log
+        foreach ($ids as $id) {
+            $stmt = $pdo->prepare("SELECT * FROM clients WHERE id = ?");
+            $stmt->execute([$id]);
+            $deleted_client = $stmt->fetch();
+            if ($deleted_client) {
+                logClientDelete($pdo, $id, $deleted_client);
+            }
+        }
+        
         $placeholders = str_repeat('?,', count($ids) - 1) . '?';
         $stmt = $pdo->prepare("DELETE FROM clients WHERE id IN ($placeholders)");
         $stmt->execute($ids);
     }
     redirect("county.php?id=$county_id");
+}
+
+// URL helper a pagination linkekhez
+function buildPaginationUrl($page, $county_id, $search, $filter_agent, $sort_by) {
+    $params = [
+        'id' => $county_id,
+        'page' => $page
+    ];
+    if (!empty($search)) $params['search'] = $search;
+    if (!empty($filter_agent)) $params['filter_agent'] = $filter_agent;
+    if ($sort_by !== 'created_at') $params['sort_by'] = $sort_by;
+    return 'county.php?' . http_build_query($params);
 }
 ?>
 <!DOCTYPE html>
@@ -649,6 +705,64 @@ $can_edit = isAdmin() ||
                         <?php endforeach; ?>
                     </tbody>
                 </table>
+                <!-- Pagination -->
+                <?php if ($total_pages > 1): ?>
+                <nav aria-label="Pagination" class="mt-4">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+                        <div class="text-muted">
+                            Összesen: <strong><?php echo $total_records; ?></strong> ügyfél | 
+                            Oldal: <strong><?php echo $page; ?></strong> / <strong><?php echo $total_pages; ?></strong>
+                        </div>
+                        <ul class="pagination mb-0">
+                            <!-- Első oldal -->
+                            <?php if ($page > 1): ?>
+                            <li class="page-item">
+                                <a class="page-link" href="<?php echo buildPaginationUrl(1, $county_id, $search, $filter_agent, $sort_by); ?>">
+                                    <i class="bi bi-chevron-double-left"></i>
+                                </a>
+                            </li>
+                            <li class="page-item">
+                                <a class="page-link" href="<?php echo buildPaginationUrl($page - 1, $county_id, $search, $filter_agent, $sort_by); ?>">
+                                    <i class="bi bi-chevron-left"></i>
+                                </a>
+                            </li>
+                            <?php endif; ?>
+            
+                            <!-- Oldalszámok -->
+                            <?php
+                            $start = max(1, $page - 2);
+                            $end = min($total_pages, $page + 2);
+            
+                            if ($start > 1) echo '<li class="page-item disabled"><span class="page-link">...</span></li>';
+            
+                            for ($i = $start; $i <= $end; $i++):
+                            ?>
+                            <li class="page-item <?php echo $i === $page ? 'active' : ''; ?>">
+                                <a class="page-link" href="<?php echo buildPaginationUrl($i, $county_id, $search, $filter_agent, $sort_by); ?>">
+                                    <?php echo $i; ?>
+                                </a>
+                            </li>
+                            <?php endfor; ?>
+            
+                            <?php if ($end < $total_pages) echo '<li class="page-item disabled"><span class="page-link">...</span></li>'; ?>
+            
+                            <!-- Utolsó oldal -->
+                            <?php if ($page < $total_pages): ?>
+                            <li class="page-item">
+                                <a class="page-link" href="<?php echo buildPaginationUrl($page + 1, $county_id, $search, $filter_agent, $sort_by); ?>">
+                                    <i class="bi bi-chevron-right"></i>
+                                </a>
+                            </li>
+                            <li class="page-item">
+                                <a class="page-link" href="<?php echo buildPaginationUrl($total_pages, $county_id, $search, $filter_agent, $sort_by); ?>">
+                                    <i class="bi bi-chevron-double-right"></i>
+                                </a>
+                            </li>
+                            <?php endif; ?>
+                        </ul>
+                    </div>
+                </nav>
+                <?php endif; ?>
             </div>
         <?php endif; ?>
     </div>

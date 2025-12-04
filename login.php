@@ -1,5 +1,6 @@
 <?php
 require_once 'config.php';
+require_once 'audit_helper.php';
 
 // Ha már be van jelentkezve, átirányítás
 if (isLoggedIn()) {
@@ -11,31 +12,42 @@ $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = $_POST['username'] ?? '';
     $password = $_POST['password'] ?? '';
-    
+
     if ($username && $password) {
         $stmt = $pdo->prepare("SELECT id, username, password, name, role, approved FROM users WHERE username = ?");
         $stmt->execute([$username]);
         $user = $stmt->fetch();
-        
+
         if ($user && password_verify($password, $user['password'])) {
             // Ellenőrizzük a jóváhagyást
             if ($user['approved'] == 0) {
                 $error = 'A fiókod még nincs jóváhagyva. Kérlek, várd meg az adminisztrátor jóváhagyását!';
+                // Sikertelen bejelentkezés logolása (nem jóváhagyott)
+                logAudit($pdo, 'LOGIN_BLOCKED', 'users', $user['id'], null, ['reason' => 'not_approved']);
             } else {
                 // Sikeres bejelentkezés
                 $_SESSION['user_id'] = $user['id'];
                 $_SESSION['username'] = $user['username'];
                 $_SESSION['name'] = $user['name'];
                 $_SESSION['role'] = $user['role'];
-                
+
                 // Utolsó bejelentkezés frissítése
                 $stmt = $pdo->prepare("UPDATE users SET last_login = NOW() WHERE id = ?");
                 $stmt->execute([$user['id']]);
-                
+
+                // Sikeres bejelentkezés logolása
+                logLogin($pdo, $user['id'], true);
+
                 redirect('index.php');
             }
         } else {
             $error = 'Hibás felhasználónév vagy jelszó!';
+            // Sikertelen bejelentkezés logolása
+            if ($user) {
+                logLogin($pdo, $user['id'], false);
+            } else {
+                logAudit($pdo, 'LOGIN_FAILED', 'users', null, null, ['username' => $username, 'reason' => 'user_not_found']);
+            }
         }
     } else {
         $error = 'Kérlek, töltsd ki az összes mezőt!';
